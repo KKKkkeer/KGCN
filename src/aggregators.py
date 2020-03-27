@@ -83,6 +83,37 @@ class SumAggregator(Aggregator):
         return self.act(output)
 
 
+class BiInteractionAggregator(Aggregator):
+    def __init__(self, batch_size, dim, dropout=0., act=tf.nn.relu, name=None):
+        super(BiInteractionAggregator, self).__init__(batch_size, dim, dropout, act, name)
+
+        with tf.variable_scope(self.name):
+            self.weights = tf.get_variable(
+                shape=[self.dim, self.dim], initializer=tf.contrib.layers.xavier_initializer(), name='weights')
+            self.bias = tf.get_variable(shape=[self.dim], initializer=tf.zeros_initializer(), name='bias')
+            self.weights2 = tf.get_variable(
+                shape=[self.dim, self.dim], initializer=tf.contrib.layers.xavier_initializer(), name='weights2')
+            self.bias2 = tf.get_variable(shape=[self.dim], initializer=tf.zeros_initializer(), name='bias2')
+
+    def _call(self, self_vectors, neighbor_vectors, neighbor_relations, user_embeddings):
+        # [batch_size, -1, dim]
+        neighbors_agg = self._mix_neighbor_vectors(neighbor_vectors, neighbor_relations, user_embeddings)
+
+        # [-1, dim]
+        output = tf.reshape(self_vectors + neighbors_agg, [-1, self.dim])
+        output = tf.nn.dropout(output, keep_prob=1-self.dropout)
+        output = tf.matmul(output, self.weights) + self.bias
+
+        # [batch_size, -1, dim]
+        output = tf.reshape(output, [self.batch_size, -1, self.dim])
+        # BiInteraction
+        output2 = tf.reshape(self_vectors * neighbors_agg, [-1, self.dim])
+        output2 = tf.nn.dropout(output2, keep_prob=1-self.dropout)
+        output2 = tf.matmul(output2, self.weights2) + self.bias2
+        output2 = tf.reshape(output2, [self.batch_size, -1, self.dim])
+
+        return self.act(output) + self.act(output2)
+
 class ConcatAggregator(Aggregator):
     def __init__(self, batch_size, dim, dropout=0., act=tf.nn.relu, name=None):
         super(ConcatAggregator, self).__init__(batch_size, dim, dropout, act, name)

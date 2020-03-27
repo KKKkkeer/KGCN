@@ -1,5 +1,5 @@
 import tensorflow as tf
-from aggregators import SumAggregator, ConcatAggregator, NeighborAggregator
+from aggregators import SumAggregator, ConcatAggregator, NeighborAggregator, BiInteractionAggregator
 from sklearn.metrics import f1_score, roc_auc_score
 
 
@@ -31,6 +31,8 @@ class KGCN(object):
             self.aggregator_class = ConcatAggregator
         elif args.aggregator == 'neighbor':
             self.aggregator_class = NeighborAggregator
+        elif args.aggregator == 'BiInteraction':
+            self.aggregator_class = BiInteractionAggregator
         else:
             raise Exception("Unknown aggregator: " + args.aggregator)
 
@@ -107,6 +109,8 @@ class KGCN(object):
             self.entity_emb_matrix) + tf.nn.l2_loss(self.relation_emb_matrix)
         for aggregator in self.aggregators:
             self.l2_loss = self.l2_loss + tf.nn.l2_loss(aggregator.weights)
+            if  self.aggregator_class == BiInteractionAggregator:
+                self.l2_loss = self.l2_loss + tf.nn.l2_loss(aggregator.weights2)
         self.loss = self.base_loss + self.l2_weight * self.l2_loss
 
         self.optimizer = tf.train.AdamOptimizer(self.lr).minimize(self.loss)

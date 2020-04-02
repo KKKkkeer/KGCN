@@ -1,6 +1,14 @@
 import tensorflow as tf
 from aggregators import SumAggregator, ConcatAggregator, NeighborAggregator, BiInteractionAggregator
 from sklearn.metrics import f1_score, roc_auc_score
+'''
+较model.py的更改：
+1. aggregate() 
+  1.1 增加各层的权重参数：self.concat_weights, concat_weights_normalize
+  1.2 更改函数返回值：out_vector
+2. _build_train()
+  2.2 更改self.l2_loss。
+'''
 
 
 class KGCN(object):
@@ -82,15 +90,21 @@ class KGCN(object):
         entity_vectors = [tf.nn.embedding_lookup(self.entity_emb_matrix, i) for i in entities]
         relation_vectors = [tf.nn.embedding_lookup(self.relation_emb_matrix, i) for i in relations]
 
-        self.concat_weights = tf.get_variable(
-                shape=[self.n_iter+1], initializer=tf.contrib.layers.xavier_initializer(), name='concat_weights')
-        concat_weights_normalize = self.concat_weights / tf.reduce_sum(self.concat_weights)
-        out_vector = tf.reshape(entity_vectors[0], [self.batch_size, -1, self.dim]) * concat_weights_normalize[0]
+        if self.n_iter == 1:
+            self.concat_weights = tf.ones([self.n_iter], tf.float32)
+        else:
+            self.concat_weights = tf.get_variable(
+                    shape=[self.n_iter], initializer=tf.contrib.layers.xavier_initializer(), name='concat_weights')
+        # three choices:
+        # concat_weights_normalize = self.concat_weights / tf.reduce_sum(self.concat_weights)
+        # concat_weights_normalize = [0.8, 0.2]
+        concat_weights_normalize = self.concat_weights
+        out_vector = tf.zeros([self.batch_size, self.dim], tf.float32)
         for i in range(self.n_iter):
             if i == self.n_iter - 1:
-                aggregator = self.aggregator_class(self.batch_size, self.dim, act=tf.nn.tanh, dropout=0.1)
+                aggregator = self.aggregator_class(self.batch_size, self.dim, act=tf.nn.tanh, dropout=0)
             else:
-                aggregator = self.aggregator_class(self.batch_size, self.dim, dropout=0.1)
+                aggregator = self.aggregator_class(self.batch_size, self.dim, dropout=0)
             aggregators.append(aggregator)
 
             entity_vectors_next_iter = []
@@ -103,7 +117,8 @@ class KGCN(object):
                                     user_embeddings=self.user_embeddings)
                 entity_vectors_next_iter.append(vector)
             entity_vectors = entity_vectors_next_iter
-            out_vector = out_vector + concat_weights_normalize[i+1] * entity_vectors[0]
+            out_vector = out_vector + concat_weights_normalize[i] * tf.reshape(
+                entity_vectors[0], [self.batch_size, self.dim])
 
         res = tf.reshape(out_vector, [self.batch_size, self.dim])
 

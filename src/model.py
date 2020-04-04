@@ -77,6 +77,8 @@ class KGCN(object):
 
     def aggregate(self, entities, relations):
         aggregators = []  # store all aggregators
+        # dimensions of entity_vectors
+        # {[?, 1, dim], [batch_size, ?, dim], ...}
         entity_vectors = [tf.nn.embedding_lookup(self.entity_emb_matrix, i) for i in entities]
         relation_vectors = [tf.nn.embedding_lookup(self.relation_emb_matrix, i) for i in relations]
 
@@ -90,6 +92,7 @@ class KGCN(object):
             entity_vectors_next_iter = []
             for hop in range(self.n_iter - i):
                 shape = [self.batch_size, -1, self.n_neighbor, self.dim]
+                # [batch_size, -1, dim]
                 vector = aggregator(self_vectors=entity_vectors[hop],
                                     neighbor_vectors=tf.reshape(entity_vectors[hop + 1], shape),
                                     neighbor_relations=tf.reshape(relation_vectors[hop], shape),

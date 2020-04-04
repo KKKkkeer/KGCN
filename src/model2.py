@@ -6,6 +6,7 @@ from sklearn.metrics import f1_score, roc_auc_score
 1. aggregate() 
   1.1 增加各层的权重参数：self.concat_weights, concat_weights_normalize
   1.2 更改函数返回值：out_vector
+  1.3 aggregator()的返回值vector是未激活的
 2. _build_train()
   2.2 更改self.l2_loss。
 '''
@@ -115,10 +116,15 @@ class KGCN(object):
                                     neighbor_vectors=tf.reshape(entity_vectors[hop + 1], shape),
                                     neighbor_relations=tf.reshape(relation_vectors[hop], shape),
                                     user_embeddings=self.user_embeddings)
-                entity_vectors_next_iter.append(vector)
+                if hop == 0:
+                    item_vector = tf.nn.tanh(vector)
+                entity_vectors_next_iter.append(tf.nn.leaky_relu(vector))
             entity_vectors = entity_vectors_next_iter
             out_vector = out_vector + concat_weights_normalize[i] * tf.reshape(
-                entity_vectors[0], [self.batch_size, self.dim])
+                item_vector, [self.batch_size, self.dim])
+            # 说明：
+            # 1. vecotr是未激活的
+            # 2. 层聚合机制：为各层分配不同的权重，求和
 
         res = tf.reshape(out_vector, [self.batch_size, self.dim])
 

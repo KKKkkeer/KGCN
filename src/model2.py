@@ -50,11 +50,11 @@ class KGCN(object):
 
     def _build_model(self, n_user, n_entity, n_relation):
         self.user_emb_matrix = tf.get_variable(
-            shape=[n_user, self.dim], initializer=KGCN.get_initializer(), name='user_emb_matrix')
+            shape=[n_user, self.dim * self.n_iter], initializer=KGCN.get_initializer(), name='user_emb_matrix')
         self.entity_emb_matrix = tf.get_variable(
             shape=[n_entity, self.dim], initializer=KGCN.get_initializer(), name='entity_emb_matrix')
         self.relation_emb_matrix = tf.get_variable(
-            shape=[n_relation, self.dim], initializer=KGCN.get_initializer(), name='relation_emb_matrix')
+            shape=[n_relation, self.dim * self.n_iter], initializer=KGCN.get_initializer(), name='relation_emb_matrix')
 
         # [batch_size, dim]
         self.user_embeddings = tf.nn.embedding_lookup(self.user_emb_matrix, self.user_indices)
@@ -90,39 +90,28 @@ class KGCN(object):
         relation_vectors = [tf.nn.embedding_lookup(self.relation_emb_matrix, i) for i in relations]
         item_vector = []
         for i in range(self.n_iter):
-            if self.n_iter == 1:
-                aggregator = self.aggregator_class(self.batch_size, self.dim, act=tf.nn.tanh, dropout=0)
-            else:
-                aggregator = self.aggregator_class(self.batch_size, self.dim, act=tf.nn.leaky_relu, dropout=0)
+            aggregator = self.aggregator_class(self.batch_size, self.dim, act=tf.nn.tanh, n_iter=self.n_iter)
             aggregators.append(aggregator)
 
             entity_vectors_next_iter = []
             for hop in range(self.n_iter - i):
                 shape = [self.batch_size, -1, self.n_neighbor, self.dim]
+                shape2 = [self.batch_size, -1, self.n_neighbor, self.dim * self.n_iter]
                 # [batch_size, -1, dim]
                 vector = aggregator(self_vectors=entity_vectors[hop],
                                     neighbor_vectors=tf.reshape(entity_vectors[hop + 1], shape),
-                                    neighbor_relations=tf.reshape(relation_vectors[hop], shape),
+                                    neighbor_relations=tf.reshape(relation_vectors[hop], shape2),
                                     user_embeddings=self.user_embeddings)
                 entity_vectors_next_iter.append(vector)
             entity_vectors = entity_vectors_next_iter
             item_vector.append(entity_vectors[0])
-        if self.n_iter == 1:
-            out_vector = entity_vectors[0]
-        else:
-            self.concat_weights = tf.get_variable(
-                    shape=[self.n_iter * self.dim, self.dim],
-                    initializer=tf.contrib.layers.xavier_initializer(),
-                    name='concat_weights')
-            out_vector = tf.concat(item_vector, axis=-1) # [batch_size, -1, dim * n_iter]
-            out_vector = tf.reshape(out_vector, [-1, self.dim * self.n_iter])
-            out_vector = tf.matmul(out_vector, self.concat_weights)
-            out_vector = tf.nn.tanh(out_vector)
+        out_vector = tf.concat(item_vector, axis=-1) # [batch_size, -1, dim * n_iter]
+        out_vector = tf.reshape(out_vector, [-1, self.dim * self.n_iter])
         # 说明：
         # 1. vecotr是已激活的
-        # 2. 层聚合机制：out = (e1||e2||...||eL) * W
+        # 2. 层聚合机制：out = (e1||e2||...||eL)
 
-        res = tf.reshape(out_vector, [self.batch_size, self.dim])
+        res = tf.reshape(out_vector, [self.batch_size, self.dim * self.n_iter])
 
         return res, aggregators
 
@@ -132,8 +121,6 @@ class KGCN(object):
 
         self.l2_loss = tf.nn.l2_loss(self.user_emb_matrix) + tf.nn.l2_loss(
             self.entity_emb_matrix) + tf.nn.l2_loss(self.relation_emb_matrix)
-        if self.n_iter > 1:
-            self.l2_loss = self.l2_loss + tf.nn.l2_loss(self.concat_weights)
         for aggregator in self.aggregators:
             self.l2_loss = self.l2_loss + tf.nn.l2_loss(aggregator.weights)
             if self.aggregator_class == BiInteractionAggregator:

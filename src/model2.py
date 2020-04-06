@@ -4,9 +4,7 @@ from sklearn.metrics import f1_score, roc_auc_score
 '''
 较model.py的更改：
 1. aggregate() 
-  1.1 增加各层的权重参数：self.concat_weights, concat_weights_normalize
-  1.2 更改函数返回值：out_vector
-  1.3 aggregator()的返回值vector是未激活的
+  1.1 使用 layer-aggregation mechanism.
 2. _build_train()
   2.2 更改self.l2_loss。
 '''
@@ -90,22 +88,12 @@ class KGCN(object):
         # {[?, 1, dim], [batch_size, ?, dim], ...}
         entity_vectors = [tf.nn.embedding_lookup(self.entity_emb_matrix, i) for i in entities]
         relation_vectors = [tf.nn.embedding_lookup(self.relation_emb_matrix, i) for i in relations]
-
-        if self.n_iter == 1:
-            self.concat_weights = tf.ones([self.n_iter], tf.float32)
-        else:
-            self.concat_weights = tf.get_variable(
-                    shape=[self.n_iter], initializer=tf.contrib.layers.xavier_initializer(), name='concat_weights')
-        # three choices:
-        # concat_weights_normalize = self.concat_weights / tf.reduce_sum(self.concat_weights)
-        # concat_weights_normalize = [0.8, 0.2]
-        concat_weights_normalize = self.concat_weights
-        out_vector = tf.zeros([self.batch_size, self.dim], tf.float32)
+        item_vector = []
         for i in range(self.n_iter):
-            if i == self.n_iter - 1:
+            if self.n_iter == 1:
                 aggregator = self.aggregator_class(self.batch_size, self.dim, act=tf.nn.tanh, dropout=0)
             else:
-                aggregator = self.aggregator_class(self.batch_size, self.dim, dropout=0)
+                aggregator = self.aggregator_class(self.batch_size, self.dim, act=tf.nn.leaky_relu, dropout=0)
             aggregators.append(aggregator)
 
             entity_vectors_next_iter = []
@@ -116,15 +104,23 @@ class KGCN(object):
                                     neighbor_vectors=tf.reshape(entity_vectors[hop + 1], shape),
                                     neighbor_relations=tf.reshape(relation_vectors[hop], shape),
                                     user_embeddings=self.user_embeddings)
-                if hop == 0:
-                    item_vector = tf.nn.tanh(vector)
-                entity_vectors_next_iter.append(tf.nn.leaky_relu(vector))
+                entity_vectors_next_iter.append(vector)
             entity_vectors = entity_vectors_next_iter
-            out_vector = out_vector + concat_weights_normalize[i] * tf.reshape(
-                item_vector, [self.batch_size, self.dim])
-            # 说明：
-            # 1. vecotr是未激活的
-            # 2. 层聚合机制：为各层分配不同的权重，求和
+            item_vector.append(entity_vectors[0])
+        if self.n_iter == 1:
+            out_vector = entity_vectors[0]
+        else:
+            self.concat_weights = tf.get_variable(
+                    shape=[self.n_iter * self.dim, self.dim],
+                    initializer=tf.contrib.layers.xavier_initializer(),
+                    name='concat_weights')
+            out_vector = tf.concat(item_vector, axis=-1) # [batch_size, -1, dim * n_iter]
+            out_vector = tf.reshape(out_vector, [-1, self.dim * self.n_iter])
+            out_vector = tf.matmul(out_vector, self.concat_weights)
+            out_vector = tf.nn.tanh(out_vector)
+        # 说明：
+        # 1. vecotr是已激活的
+        # 2. 层聚合机制：out = (e1||e2||...||eL) * W
 
         res = tf.reshape(out_vector, [self.batch_size, self.dim])
 
@@ -135,10 +131,12 @@ class KGCN(object):
             labels=self.labels, logits=self.scores))
 
         self.l2_loss = tf.nn.l2_loss(self.user_emb_matrix) + tf.nn.l2_loss(
-            self.entity_emb_matrix) + tf.nn.l2_loss(self.relation_emb_matrix) + tf.nn.l2_loss(self.concat_weights)
+            self.entity_emb_matrix) + tf.nn.l2_loss(self.relation_emb_matrix)
+        if self.n_iter > 1:
+            self.l2_loss = self.l2_loss + tf.nn.l2_loss(self.concat_weights)
         for aggregator in self.aggregators:
             self.l2_loss = self.l2_loss + tf.nn.l2_loss(aggregator.weights)
-            if  self.aggregator_class == BiInteractionAggregator:
+            if self.aggregator_class == BiInteractionAggregator:
                 self.l2_loss = self.l2_loss + tf.nn.l2_loss(aggregator.weights2)
         self.loss = self.base_loss + self.l2_weight * self.l2_loss
 

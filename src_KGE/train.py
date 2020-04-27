@@ -1,7 +1,8 @@
 import tensorflow as tf
 import numpy as np
 from model2 import KGCN
-
+import sys
+import random as rd
 
 def train(args, data, show_loss, show_topk):
     n_user, n_item, n_entity, n_relation = data[0], data[1], data[2], data[3]
@@ -14,20 +15,21 @@ def train(args, data, show_loss, show_topk):
     user_list, train_record, test_record, item_set, k_list = topk_settings(
         show_topk, train_data, test_data, n_item)
 
+    exist_users, user_dict = analyze_data(train_data)
+
     with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())
-
+        n_batch = train_data.shape[0] // args.batch_size + 1
         for step in range(args.n_epochs):
             # training
             np.random.shuffle(train_data)
             start = 0
             # skip the last incomplete minibatch if its size < batch size
-            while start + args.batch_size <= train_data.shape[0]:
+            for _ in range(n_batch):
                 _, loss = model.train(
                     sess,
-                    get_train_feed_dict(model, train_data, start,
-                                        start + args.batch_size))
-                start += args.batch_size
+                    get_train_feed_dict(model, train_data, args.batch_size,
+                                        exist_users, user_dict, n_item))
                 if show_loss:
                     print(start, loss)
 
@@ -86,11 +88,59 @@ def get_feed_dict(model, data, start, end):
     return feed_dict
 
 
-def get_train_feed_dict(model, data, start, end):
+def analyze_data(data):
+    user_dict = dict()
+    for i in range(data.shape[0]):
+        if data[i, 2] == 1:
+            # if data[i, 0] in user_dict:
+            #     user_dict[data[i, 0]] = user_dict[data[i, 0]].append(data[i, 1])
+            # else:
+            #     user_dict[data[i, 0]] = [data[i, 1]]
+            user_dict[data[i, 0]] = user_dict.get(data[i, 0], [])
+            user_dict[data[i, 0]].append(data[i, 1])
+    exist_users = list(user_dict.keys())
+    return exist_users, user_dict
+
+
+def get_train_feed_dict(model, data, batch_size, exist_users, train_user_dict, n_items):
+    n_users = len(exist_users)
+    if batch_size <= n_users:
+        users = rd.sample(exist_users, batch_size)
+    else:
+        users = [rd.choice(exist_users) for _ in range(batch_size)]
+
+    def sample_pos_items_for_u(u, num):
+        pos_items = train_user_dict[u]
+        n_pos_items = len(pos_items)
+        pos_batch = []
+        while True:
+            if len(pos_batch) == num: break
+            pos_id = np.random.randint(low=0, high=n_pos_items, size=1)[0]
+            pos_i_id = pos_items[pos_id]
+
+            if pos_i_id not in pos_batch:
+                pos_batch.append(pos_i_id)
+        return pos_batch
+
+    def sample_neg_items_for_u(u, num, n_items):
+        neg_items = []
+        while True:
+            if len(neg_items) == num: break
+            neg_i_id = np.random.randint(low=0, high=n_items,size=1)[0]
+
+            if neg_i_id not in train_user_dict[u] and neg_i_id not in neg_items:
+                neg_items.append(neg_i_id)
+        return neg_items
+
+    pos_items, neg_items = [], []
+    for u in users:
+        pos_items += sample_pos_items_for_u(u, 1)
+        neg_items += sample_neg_items_for_u(u, 1, n_items)
+
     feed_dict = {
-        model.user_indices: data[start:end, 0],
-        model.pos_item_indices: data[start:end, 1],
-        model.reg_item_indices: 0
+        model.user_indices: users,
+        model.pos_item_indices: pos_items,
+        model.neg_item_indices: neg_items
     }
     return feed_dict
 

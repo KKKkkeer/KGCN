@@ -51,13 +51,15 @@ class KGCN(object):
         self.pos_item_indices = tf.placeholder(dtype=tf.int64,
                                                shape=[None],
                                                name='pos_item_indices')
-        self.reg_item_indices = tf.placeholder(dtype=tf.int64,
+        self.neg_item_indices = tf.placeholder(dtype=tf.int64,
                                                shape=[None],
-                                               name='reg_item_indices')
-        self.labels = tf.placeholder(dtype=tf.float32,
-                                     shape=[None],
-                                     name='labels')
+                                               name='neg_item_indices')
 
+        # eval
+        self.item_indices = tf.placeholder(dtype=tf.int64, shape=[None], name='item_indices')
+        self.labels = tf.placeholder(dtype=tf.float32, shape=[None], name='labels')
+
+        # KGE
         self.h = tf.placeholder(tf.int32, shape=[None], name='h')
         self.r = tf.placeholder(tf.int32, shape=[None], name='r')
         self.pos_t = tf.placeholder(tf.int32, shape=[None], name='pos_t')
@@ -84,15 +86,20 @@ class KGCN(object):
         # entities is a list of i-iter (i = 0, 1, ..., n_iter) neighbors for the batch of items
         # dimensions of entities:
         # {[batch_size, 1], [batch_size, n_neighbor], [batch_size, n_neighbor^2], ..., [batch_size, n_neighbor^n_iter]}
-        entities, relations = self.get_neighbors(self.pos_item_indices)
+        pos_entities, pos_relations = self.get_neighbors(self.pos_item_indices)
+        neg_entities, neg_relations = self.get_neighbors(self.neg_item_indices)
 
         # [batch_size, dim]
-        self.item_embeddings, self.aggregators = self.aggregate(
-            entities, relations)
+        self._get_aggregator()
+        self.pos_item_embeddings = self.aggregate(pos_entities, pos_relations)
+        self.neg_item_embeddings = self.aggregate(neg_entities, neg_relations)
+
 
         # [batch_size]
+        entities, relations = self.get_neighbors(self.item_indices)
+        self.eval_item_embeddings = self.aggregate(entities, relations)
         self.scores = tf.reduce_sum(self.user_embeddings *
-                                    self.item_embeddings,
+                                    self.eval_item_embeddings,
                                     axis=1)
         self.scores_normalized = tf.sigmoid(self.scores)
 
@@ -110,8 +117,16 @@ class KGCN(object):
             relations.append(neighbor_relations)
         return entities, relations
 
+    def _get_aggregator(self):
+        self.aggregators = []
+        for i in range(self.n_iter):
+            aggregator = self.aggregator_class(self.batch_size,
+                                               self.dim,
+                                               act=tf.nn.tanh,
+                                               n_iter=self.n_iter)
+            self.aggregators.append(aggregator)
+
     def aggregate(self, entities, relations):
-        aggregators = []  # store all aggregators
         # dimensions of entity_vectors
         # {[?, 1, dim], [batch_size, ?, dim], ...}
         entity_vectors = [
@@ -123,11 +138,7 @@ class KGCN(object):
         ]
         item_vector = []
         for i in range(self.n_iter):
-            aggregator = self.aggregator_class(self.batch_size,
-                                               self.dim,
-                                               act=tf.nn.tanh,
-                                               n_iter=self.n_iter)
-            aggregators.append(aggregator)
+            aggregator = self.aggregators[i]
 
             entity_vectors_next_iter = []
             for hop in range(self.n_iter - i):
@@ -156,12 +167,17 @@ class KGCN(object):
 
         res = tf.reshape(out_vector, [self.batch_size, self.dim * self.n_iter])
 
-        return res, aggregators
+        return res
 
     def _build_train(self):
+        pos_scores = tf.reduce_sum(tf.multiply(self.user_embeddings,
+                                               self.pos_item_embeddings),
+                                   axis=1)
+        neg_scores = tf.reduce_sum(tf.multiply(self.user_embeddings,
+                                               self.neg_item_embeddings),
+                                   axis=1)
         self.base_loss = tf.reduce_mean(
-            tf.nn.sigmoid_cross_entropy_with_logits(labels=self.labels,
-                                                    logits=self.scores))
+            tf.nn.softplus(-(pos_scores - neg_scores)))
 
         self.l2_loss = tf.nn.l2_loss(self.user_emb_matrix) + tf.nn.l2_loss(
             self.entity_emb_matrix) + tf.nn.l2_loss(self.relation_emb_matrix)
@@ -187,5 +203,5 @@ class KGCN(object):
         return auc, f1
 
     def get_scores(self, sess, feed_dict):
-        return sess.run([self.pos_item_indices, self.scores_normalized],
+        return sess.run([self.item_indices, self.scores_normalized],
                         feed_dict)

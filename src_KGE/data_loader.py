@@ -4,10 +4,10 @@ import os
 
 def load_data(args):
     n_user, n_item, train_data, eval_data, test_data = load_rating(args)
-    n_entity, n_relation, adj_entity, adj_relation = load_kg(args)
+    n_entity, n_relation, adj_entity, adj_relation, n_kg_triple, kg = load_kg(args)
     print('data loaded.')
 
-    return n_user, n_item, n_entity, n_relation, train_data, eval_data, test_data, adj_entity, adj_relation
+    return n_user, n_item, n_entity, n_relation, train_data, eval_data, test_data, adj_entity, adj_relation, n_kg_triple, kg
 
 
 def load_rating(args):
@@ -62,12 +62,14 @@ def load_kg(args):
         np.save(kg_file + '.npy', kg_np)
 
     n_entity = len(set(kg_np[:, 0]) | set(kg_np[:, 2]))
+    n_head_entity = len(set(kg_np[:, 0]))
     n_relation = len(set(kg_np[:, 1]))
+    n_kg_triple = kg_np.shape[0]
 
     kg = construct_kg(kg_np)
-    adj_entity, adj_relation = construct_adj(args, kg, n_entity)
+    adj_entity, adj_relation = construct_adj(args, kg, n_head_entity)
 
-    return n_entity, n_relation, adj_entity, adj_relation
+    return n_entity, n_relation, adj_entity, adj_relation, n_kg_triple, kg
 
 
 def construct_kg(kg_np):
@@ -81,9 +83,10 @@ def construct_kg(kg_np):
         if head not in kg:
             kg[head] = []
         kg[head].append((tail, relation))
-        if tail not in kg:
-            kg[tail] = []
-        kg[tail].append((head, relation))
+        # 注释一下3行，为单向图
+        # if tail not in kg:
+        #     kg[tail] = []
+        # kg[tail].append((head, relation))
     return kg
 
 

@@ -3,11 +3,13 @@ import numpy as np
 from model2 import KGCN
 import sys
 import random as rd
+from time import time
 
 def train(args, data, show_loss, show_topk):
     n_user, n_item, n_entity, n_relation = data[0], data[1], data[2], data[3]
     train_data, eval_data, test_data = data[4], data[5], data[6]
     adj_entity, adj_relation = data[7], data[8]
+    n_kg_triple, all_kg_dict = data[9], data[10]
 
     model = KGCN(args, n_user, n_entity, n_relation, adj_entity, adj_relation)
 
@@ -21,6 +23,8 @@ def train(args, data, show_loss, show_topk):
         sess.run(tf.global_variables_initializer())
         n_batch = train_data.shape[0] // args.batch_size + 1
         for step in range(args.n_epochs):
+            t1 = time()
+            loss2, kge_loss, reg_loss = 0., 0., 0.
             # training
             np.random.shuffle(train_data)
             start = 0
@@ -60,6 +64,23 @@ def train(args, data, show_loss, show_topk):
                 for i in recall:
                     print('%.4f\t' % i, end='')
                 print('\n')
+            '''
+            train the KGE method
+            '''
+            n_A_batch = n_kg_triple // args.batch_size_kg + 1
+            for idx in range(n_A_batch):
+                A_batch_data = generate_train_A_batch(args, all_kg_dict, n_entity)
+                feed_dict = generate_train_A_feed_dict(model, A_batch_data)
+
+                _, batch_loss, batch_kge_loss, batch_reg_loss = model.train_A(sess, feed_dict=feed_dict)
+
+                loss2 += batch_loss
+                kge_loss += batch_kge_loss
+                reg_loss += batch_reg_loss
+
+            perf_str = 'Epoch %d [%.1fs]: train==[%.5f=%.5f + %.5f]' % (
+                    step, time() - t1, loss2, kge_loss, reg_loss)
+            print(perf_str)
 
 
 def topk_settings(show_topk, train_data, test_data, n_item):
@@ -217,3 +238,66 @@ def get_user_record(data, is_train):
                 user_history_dict[user] = set()
             user_history_dict[user].add(item)
     return user_history_dict
+
+
+def generate_train_A_batch(args, all_kg_dict, n_entities):
+    exist_heads = all_kg_dict.keys()
+
+    if args.batch_size_kg <= len(exist_heads):
+        heads = rd.sample(exist_heads, args.batch_size_kg)
+    else:
+        heads = [rd.choice(exist_heads) for _ in range(args.batch_size_kg)]
+
+    def sample_pos_triples_for_h(h, num):
+        pos_triples = all_kg_dict[h]
+        n_pos_triples = len(pos_triples)
+
+        pos_rs, pos_ts = [], []
+        while True:
+            if len(pos_rs) == num: break
+            pos_id = np.random.randint(low=0, high=n_pos_triples, size=1)[0]
+
+            t = pos_triples[pos_id][0]
+            r = pos_triples[pos_id][1]
+
+            if r not in pos_rs and t not in pos_ts:
+                pos_rs.append(r)
+                pos_ts.append(t)
+        return pos_rs, pos_ts
+
+    def sample_neg_triples_for_h(h, r, num):
+        neg_ts = []
+        while True:
+            if len(neg_ts) == num: break
+
+            t = np.random.randint(low=0, high=n_entities, size=1)[0]
+            if (t, r) not in all_kg_dict[h] and t not in neg_ts:
+                neg_ts.append(t)
+        return neg_ts
+
+    pos_r_batch, pos_t_batch, neg_t_batch = [], [], []
+
+    for h in heads:
+        pos_rs, pos_ts = sample_pos_triples_for_h(h, 1)
+        pos_r_batch += pos_rs
+        pos_t_batch += pos_ts
+
+        neg_ts = sample_neg_triples_for_h(h, pos_rs[0], 1)
+        neg_t_batch += neg_ts
+
+    batch_data = {}
+    batch_data['heads'] = heads
+    batch_data['relations'] = pos_r_batch
+    batch_data['pos_tails'] = pos_t_batch
+    batch_data['neg_tails'] = neg_t_batch
+    return batch_data
+
+
+def generate_train_A_feed_dict(model, batch_data):
+    feed_dict = {
+        model.h: batch_data['heads'],
+        model.r: batch_data['relations'],
+        model.pos_t: batch_data['pos_tails'],
+        model.neg_t: batch_data['neg_tails'],
+    }
+    return feed_dict

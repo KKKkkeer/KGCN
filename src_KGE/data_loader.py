@@ -1,5 +1,6 @@
 import numpy as np
 import os
+import sys
 
 
 def load_data(args):
@@ -62,17 +63,17 @@ def load_kg(args):
         np.save(kg_file + '.npy', kg_np)
 
     n_entity = len(set(kg_np[:, 0]) | set(kg_np[:, 2]))
-    n_head_entity = len(set(kg_np[:, 0]))
     n_relation = len(set(kg_np[:, 1]))
-    n_kg_triple = kg_np.shape[0]
+    n_kg_triple = kg_np.shape[0] * 2
 
-    kg = construct_kg(kg_np)
-    adj_entity, adj_relation = construct_adj(args, kg, n_head_entity)
+    kg = construct_kg(kg_np, n_relation)
+    adj_entity, adj_relation = construct_adj(args, kg, n_entity)
+    n_relation = n_relation + n_relation  # relation^-1 = relation + n_relation
 
     return n_entity, n_relation, adj_entity, adj_relation, n_kg_triple, kg
 
 
-def construct_kg(kg_np):
+def construct_kg(kg_np, n_relation):
     print('constructing knowledge graph ...')
     kg = dict()
     for triple in kg_np:
@@ -84,9 +85,9 @@ def construct_kg(kg_np):
             kg[head] = []
         kg[head].append((tail, relation))
         # 注释一下3行，为单向图
-        # if tail not in kg:
-        #     kg[tail] = []
-        # kg[tail].append((head, relation))
+        if tail not in kg:
+            kg[tail] = []
+        kg[tail].append((head, relation + n_relation))
     return kg
 
 

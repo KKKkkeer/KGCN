@@ -1,5 +1,6 @@
 import tensorflow as tf
 from abc import abstractmethod
+import sys
 
 LAYER_IDS = {}
 
@@ -25,12 +26,12 @@ class Aggregator(object):
         self.dim = dim
         self.n_iter = n_iter
 
-    def __call__(self, self_vectors, neighbor_vectors, neighbor_relations, user_embeddings):
-        outputs = self._call(self_vectors, neighbor_vectors, neighbor_relations, user_embeddings)
+    def __call__(self, self_vectors, neighbor_vectors, neighbor_relations, user_embeddings, trans_M, hop):
+        outputs = self._call(self_vectors, neighbor_vectors, neighbor_relations, user_embeddings, trans_M, hop)
         return outputs
 
     @abstractmethod
-    def _call(self, self_vectors, neighbor_vectors, neighbor_relations, user_embeddings):
+    def _call(self, self_vectors, neighbor_vectors, neighbor_relations, user_embeddings, trans_M, hop):
         # dimension:
         # self_vectors: [batch_size, -1, dim]
         # neighbor_vectors: [batch_size, -1, n_neighbor, dim]
@@ -38,14 +39,19 @@ class Aggregator(object):
         # user_embeddings: [batch_size, dim]
         pass
 
-    def _mix_neighbor_vectors(self, neighbor_vectors, neighbor_relations, user_embeddings):
+    def _mix_neighbor_vectors(self, neighbor_vectors, neighbor_relations, user_embeddings, trans_M, hop):
         avg = False
         if not avg:
+            n_neighbor = neighbor_vectors.shape[2].value
             # [batch_size, 1, 1, dim]
-            user_embeddings = tf.reshape(user_embeddings, [self.batch_size, 1, 1, self.dim * self.n_iter])
+            user_embeddings = tf.reshape(user_embeddings, [self.batch_size, 1, 1, 1, self.dim])
+            user_embeddings = tf.tile(user_embeddings, [1, n_neighbor**hop, n_neighbor, 1, 1])
+            trans_M = tf.reshape(trans_M, [self.batch_size, n_neighbor**hop, n_neighbor, self.dim, self.dim])
+            user_emb_relation = tf.matmul(user_embeddings, trans_M)
+            user_emb_relation = tf.squeeze(user_emb_relation, 3)
 
             # [batch_size, -1, n_neighbor]
-            user_relation_scores = tf.reduce_mean(user_embeddings * neighbor_relations, axis=-1)
+            user_relation_scores = tf.reduce_mean(user_emb_relation * neighbor_relations, axis=-1)
             user_relation_scores_normalized = tf.nn.softmax(user_relation_scores, dim=-1)
 
             # [batch_size, -1, n_neighbor, 1]
@@ -69,9 +75,9 @@ class SumAggregator(Aggregator):
                 shape=[self.dim, self.dim], initializer=tf.contrib.layers.xavier_initializer(), name='weights')
             self.bias = tf.get_variable(shape=[self.dim], initializer=tf.zeros_initializer(), name='bias')
 
-    def _call(self, self_vectors, neighbor_vectors, neighbor_relations, user_embeddings):
+    def _call(self, self_vectors, neighbor_vectors, neighbor_relations, user_embeddings, trans_M, hop):
         # [batch_size, -1, dim]
-        neighbors_agg = self._mix_neighbor_vectors(neighbor_vectors, neighbor_relations, user_embeddings)
+        neighbors_agg = self._mix_neighbor_vectors(neighbor_vectors, neighbor_relations, user_embeddings, trans_M, hop)
 
         # [-1, dim]
         output = tf.reshape(self_vectors + neighbors_agg, [-1, self.dim])

@@ -23,7 +23,7 @@ def train(args, data, show_loss, show_topk):
         sess.run(tf.global_variables_initializer())
         n_batch = train_data.shape[0] // args.batch_size + 1
         for step in range(args.n_epochs):
-            t1 = time()
+            t0 = time()
             loss2, kge_loss, reg_loss = 0., 0., 0.
             # training
             np.random.shuffle(train_data)
@@ -45,10 +45,9 @@ def train(args, data, show_loss, show_topk):
             test_auc, test_f1 = ctr_eval(sess, model, test_data,
                                          args.batch_size)
 
-            print(
-                'epoch %d    train auc: %.4f  f1: %.4f    eval auc: %.4f  f1: %.4f    test auc: %.4f  f1: %.4f'
-                % (step, train_auc, train_f1, eval_auc, eval_f1, test_auc,
-                   test_f1))
+            str1 = 'train auc: %.4f f1: %.4f  eval auc: %.4f f1: %.4f  test auc: %.4f f1: %.4f' % (
+                train_auc, train_f1, eval_auc, eval_f1, test_auc,
+                test_f1)
 
             # top-K evaluation
             if show_topk:
@@ -67,6 +66,7 @@ def train(args, data, show_loss, show_topk):
             '''
             train the KGE method
             '''
+            t1 = time()
             n_A_batch = n_kg_triple // args.batch_size_kg + 1
             for idx in range(n_A_batch):
                 A_batch_data = generate_train_A_batch(args, all_kg_dict, n_entity)
@@ -78,9 +78,10 @@ def train(args, data, show_loss, show_topk):
                 kge_loss += batch_kge_loss
                 reg_loss += batch_reg_loss
 
-            perf_str = 'Epoch %d [%.1fs]: train==[%.5f=%.5f + %.5f]' % (
-                    step, time() - t1, loss2, kge_loss, reg_loss)
-            print(perf_str)
+            str2 = 'Epoch %d [%.1fs = %.1fs + %.1fs]  ' % (
+                step, time() - t0, t1 - t0, time() - t1)
+            str2 = str2 + str1 + '  KGE_loss: %.5f' % (loss2)
+            print(str2)
 
 
 def topk_settings(show_topk, train_data, test_data, n_item):
@@ -113,10 +114,6 @@ def analyze_data(data):
     user_dict = dict()
     for i in range(data.shape[0]):
         if data[i, 2] == 1:
-            # if data[i, 0] in user_dict:
-            #     user_dict[data[i, 0]] = user_dict[data[i, 0]].append(data[i, 1])
-            # else:
-            #     user_dict[data[i, 0]] = [data[i, 1]]
             user_dict[data[i, 0]] = user_dict.get(data[i, 0], [])
             user_dict[data[i, 0]].append(data[i, 1])
     exist_users = list(user_dict.keys())

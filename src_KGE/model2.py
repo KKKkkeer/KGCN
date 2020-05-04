@@ -1,6 +1,7 @@
 import tensorflow as tf
 from aggregators import SumAggregator, ConcatAggregator, NeighborAggregator, BiInteractionAggregator
 from sklearn.metrics import f1_score, roc_auc_score
+import sys
 '''
 较model.py的更改：
 1. aggregate() 
@@ -76,7 +77,7 @@ class KGCN(object):
 
     def _build_weights(self, n_user, n_entity, n_relation):
         self.user_emb_matrix = tf.get_variable(
-            shape=[n_user, self.dim * self.n_iter],
+            shape=[n_user, self.dim],
             initializer=KGCN.get_initializer(),
             name='user_emb_matrix')
         self.entity_emb_matrix = tf.get_variable(
@@ -84,11 +85,11 @@ class KGCN(object):
             initializer=KGCN.get_initializer(),
             name='entity_emb_matrix')
         self.relation_emb_matrix = tf.get_variable(
-            shape=[n_relation, self.dim * self.n_iter],
+            shape=[n_relation, self.dim],
             initializer=KGCN.get_initializer(),
             name='relation_emb_matrix')
         self.trans_W = tf.get_variable(
-            shape=[n_relation, self.dim, self.dim * self.n_iter],
+            shape=[n_relation, self.dim, self.dim],
             initializer=KGCN.get_initializer(),
             name='trans_W')
 
@@ -139,10 +140,10 @@ class KGCN(object):
         trans_M = tf.nn.embedding_lookup(self.trans_W, r)
 
         # batch_size * 1 * kge_dim -> batch_size * kge_dim
-        h_e = tf.reshape(tf.matmul(h_e, trans_M), [-1, self.dim * self.n_iter])
-        pos_t_e = tf.reshape(tf.matmul(pos_t_e, trans_M), [self.dim * self.n_iter])
-        neg_t_e = tf.reshape(tf.matmul(neg_t_e, trans_M), [self.dim * self.n_iter])
-        
+        h_e = tf.reshape(tf.matmul(h_e, trans_M), [-1, self.dim])
+        pos_t_e = tf.reshape(tf.matmul(pos_t_e, trans_M), [-1, self.dim])
+        neg_t_e = tf.reshape(tf.matmul(neg_t_e, trans_M), [-1, self.dim])
+
         # Remove the l2 normalization terms
         # h_e = tf.math.l2_normalize(h_e, axis=1)
         # r_e = tf.math.l2_normalize(r_e, axis=1)
@@ -183,10 +184,10 @@ class KGCN(object):
         relations = []
         for i in range(self.n_iter):
             neighbor_entities = tf.reshape(
-                tf.gather(self.adj_entity, entities[i]), [self.batch_size, -1])
+                tf.gather(self.adj_entity, entities[i]), [self.batch_size, self.n_neighbor**(i+1)])
             neighbor_relations = tf.reshape(
                 tf.gather(self.adj_relation, entities[i]),
-                [self.batch_size, -1])
+                [self.batch_size, self.n_neighbor**(i+1)])
             entities.append(neighbor_entities)
             relations.append(neighbor_relations)
         return entities, relations
@@ -210,36 +211,37 @@ class KGCN(object):
             tf.nn.embedding_lookup(self.relation_emb_matrix, i)
             for i in relations
         ]
+        trans_M = [
+            tf.nn.embedding_lookup(self.trans_W, i) for i in relations]
         item_vector = []
         for i in range(self.n_iter):
             aggregator = self.aggregators[i]
 
             entity_vectors_next_iter = []
             for hop in range(self.n_iter - i):
-                shape = [self.batch_size, -1, self.n_neighbor, self.dim]
-                shape2 = [
-                    self.batch_size, -1, self.n_neighbor,
-                    self.dim * self.n_iter
-                ]
+                shape = [self.batch_size, self.n_neighbor**hop, self.n_neighbor, self.dim]
+
                 # [batch_size, -1, dim]
                 vector = aggregator(
                     self_vectors=entity_vectors[hop],
                     neighbor_vectors=tf.reshape(entity_vectors[hop + 1],
                                                 shape),
                     neighbor_relations=tf.reshape(relation_vectors[hop],
-                                                  shape2),
-                    user_embeddings=self.user_embeddings)
+                                                  shape),
+                    user_embeddings=self.user_embeddings,
+                    trans_M=trans_M[hop], hop=hop)
                 entity_vectors_next_iter.append(vector)
             entity_vectors = entity_vectors_next_iter
             item_vector.append(entity_vectors[0])
-        out_vector = tf.concat(item_vector,
-                               axis=-1)  # [batch_size, -1, dim * n_iter]
-        out_vector = tf.reshape(out_vector, [-1, self.dim * self.n_iter])
+        # out_vector = tf.convert_to_tensor(item_vector,
+        #                        axis=-1)  # [batch_size, -1, dim * n_iter]
+        out_vector = entity_vectors[0]
+        out_vector = tf.reshape(out_vector, [-1, self.dim])
         # 说明：
         # 1. vecotr是已激活的
         # 2. 层聚合机制：out = (e1||e2||...||eL)
 
-        res = tf.reshape(out_vector, [self.batch_size, self.dim * self.n_iter])
+        res = tf.reshape(out_vector, [self.batch_size, self.dim])
 
         return res
 
@@ -271,7 +273,7 @@ class KGCN(object):
 
         pos_kg_score = _get_kg_score(self.h_e, self.r_e, self.pos_t_e)
         neg_kg_score = _get_kg_score(self.h_e, self.r_e, self.neg_t_e)
-        
+
         # Using the softplus as BPR loss to avoid the nan error.
         kg_loss = tf.reduce_mean(tf.nn.softplus(-(neg_kg_score - pos_kg_score)))
         # maxi = tf.log(tf.nn.sigmoid(neg_kg_score - pos_kg_score))
@@ -303,6 +305,6 @@ class KGCN(object):
     def get_scores(self, sess, feed_dict):
         return sess.run([self.item_indices, self.scores_normalized],
                         feed_dict)
-    
+
     def train_A(self, sess, feed_dict):
         return sess.run([self.opt2, self.loss2, self.kge_loss2, self.reg_loss2], feed_dict)

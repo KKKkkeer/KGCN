@@ -256,13 +256,15 @@ class KGCN(object):
             tf.nn.softplus(-(pos_scores - neg_scores)))
 
         self.l2_loss = tf.nn.l2_loss(self.user_emb_matrix) + tf.nn.l2_loss(
-            self.entity_emb_matrix) + tf.nn.l2_loss(self.relation_emb_matrix)
+            self.entity_emb_matrix) + tf.nn.l2_loss(self.relation_emb_matrix) + \
+                tf.nn.l2_loss(self.trans_W)
         for aggregator in self.aggregators:
             self.l2_loss = self.l2_loss + tf.nn.l2_loss(aggregator.weights)
             if self.aggregator_class == BiInteractionAggregator:
                 self.l2_loss = self.l2_loss + tf.nn.l2_loss(
                     aggregator.weights2)
-        self.loss = self.base_loss + self.l2_weight * self.l2_loss
+        self.reg_loss = self.l2_weight * self.l2_loss
+        self.loss = self.base_loss + self.reg_loss
 
         self.optimizer = tf.train.AdamOptimizer(self.lr).minimize(self.loss)
 
@@ -280,7 +282,8 @@ class KGCN(object):
         # kg_loss = tf.negative(tf.reduce_mean(maxi))
 
         kg_reg_loss = tf.nn.l2_loss(self.h_e) + tf.nn.l2_loss(self.r_e) + \
-                      tf.nn.l2_loss(self.pos_t_e) + tf.nn.l2_loss(self.neg_t_e)
+                      tf.nn.l2_loss(self.pos_t_e) + tf.nn.l2_loss(self.neg_t_e) + \
+                      tf.nn.l2_loss(self.trans_W)
         kg_reg_loss = kg_reg_loss / self.batch_size_kg
 
         self.kge_loss2 = kg_loss
@@ -291,7 +294,7 @@ class KGCN(object):
         self.opt2 = tf.train.AdamOptimizer(learning_rate=self.lr).minimize(self.loss2)
 
     def train(self, sess, feed_dict):
-        return sess.run([self.optimizer, self.loss], feed_dict)
+        return sess.run([self.optimizer, self.loss, self.base_loss, self.reg_loss], feed_dict)
 
     def eval(self, sess, feed_dict):
         labels, scores = sess.run([self.labels, self.scores_normalized],

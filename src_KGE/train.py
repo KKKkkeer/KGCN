@@ -5,7 +5,7 @@ import sys
 import random as rd
 from time import time
 
-def train(args, data, show_loss, show_topk):
+def train(args, data, show_loss, show_topk, train_Rec=True, train_KGE=True):
     n_user, n_item, n_entity, n_relation = data[0], data[1], data[2], data[3]
     train_data, eval_data, test_data = data[4], data[5], data[6]
     adj_entity, adj_relation = data[7], data[8]
@@ -18,36 +18,44 @@ def train(args, data, show_loss, show_topk):
         show_topk, train_data, test_data, n_item)
 
     exist_users, user_dict = analyze_data(train_data)
+    batch_size_kg = n_kg_triple // (train_data.shape[0] // args.batch_size)
 
+    print('n_user, n_item = {}, {}'.format(n_user, n_item))
+    print('n_entity, n_relation, n_triple = {}, {}, {}'.format(n_entity, n_relation, n_kg_triple))
     with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())
         n_batch = train_data.shape[0] // args.batch_size + 1
         for step in range(args.n_epochs):
             t0 = time()
-            loss2, kge_loss, reg_loss = 0., 0., 0.
+            loss, base_loss, kge_loss, reg_loss = 0., 0., 0., 0.
+            str1, str2 = '', ''
             # training
             np.random.shuffle(train_data)
             start = 0
             # skip the last incomplete minibatch if its size < batch size
-            for _ in range(n_batch):
-                _, loss = model.train(
-                    sess,
-                    get_train_feed_dict(model, train_data, args.batch_size,
-                                        exist_users, user_dict, n_item))
-                if show_loss:
-                    print(start, loss)
+            if train_Rec:
+                for _ in range(n_batch):
+                    _, batch_loss, batch_base_loss, batch_reg_loss = model.train(
+                        sess,
+                        get_train_feed_dict(model, train_data, args.batch_size,
+                                            exist_users, user_dict, n_item))
+                    if show_loss:
+                        print(start, loss)
+                    loss += batch_loss
+                    base_loss += batch_base_loss
+                    reg_loss += batch_reg_loss
 
-            # CTR evaluation
-            train_auc, train_f1 = ctr_eval(sess, model, train_data,
-                                           args.batch_size)
-            eval_auc, eval_f1 = ctr_eval(sess, model, eval_data,
-                                         args.batch_size)
-            test_auc, test_f1 = ctr_eval(sess, model, test_data,
-                                         args.batch_size)
+                # CTR evaluation
+                train_auc, train_f1 = ctr_eval(sess, model, train_data,
+                                            args.batch_size)
+                eval_auc, eval_f1 = ctr_eval(sess, model, eval_data,
+                                            args.batch_size)
+                test_auc, test_f1 = ctr_eval(sess, model, test_data,
+                                            args.batch_size)
 
-            str1 = 'train auc: %.4f f1: %.4f  eval auc: %.4f f1: %.4f  test auc: %.4f f1: %.4f' % (
-                train_auc, train_f1, eval_auc, eval_f1, test_auc,
-                test_f1)
+                str1 = 'train auc: %.4f f1: %.4f  eval auc: %.4f f1: %.4f  test auc: %.4f f1: %.4f' % (
+                    train_auc, train_f1, eval_auc, eval_f1, test_auc,
+                    test_f1)
 
             # top-K evaluation
             if show_topk:
@@ -66,21 +74,21 @@ def train(args, data, show_loss, show_topk):
             '''
             train the KGE method
             '''
-            t1 = time()
-            n_A_batch = n_kg_triple // args.batch_size_kg + 1
-            for idx in range(n_A_batch):
-                A_batch_data = generate_train_A_batch(args, all_kg_dict, n_entity)
-                feed_dict = generate_train_A_feed_dict(model, A_batch_data)
+            if train_KGE:
+                n_A_batch = n_kg_triple // batch_size_kg + 1
+                for idx in range(n_A_batch):
+                    A_batch_data = generate_train_A_batch(args, all_kg_dict, n_entity)
+                    feed_dict = generate_train_A_feed_dict(model, A_batch_data)
 
-                _, batch_loss, batch_kge_loss, batch_reg_loss = model.train_A(sess, feed_dict=feed_dict)
+                    _, batch_loss, batch_kge_loss, batch_reg_loss = model.train_A(sess, feed_dict=feed_dict)
 
-                loss2 += batch_loss
-                kge_loss += batch_kge_loss
-                reg_loss += batch_reg_loss
+                    loss += batch_loss
+                    kge_loss += batch_kge_loss
+                    reg_loss += batch_reg_loss
 
-            str2 = 'Epoch %d [%.1fs = %.1fs + %.1fs]  ' % (
-                step, time() - t0, t1 - t0, time() - t1)
-            str2 = str2 + str1 + '  KGE_loss: %.5f' % (loss2)
+            str2 = 'Epoch %d [%.1fs]  ' % (
+                step, time() - t0)
+            str2 = str2 + str1 + '\n\t\tloss: %.5f = %.5f + %.5f + %.5f' % (loss, base_loss, kge_loss, reg_loss)
             print(str2)
 
 

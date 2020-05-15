@@ -40,6 +40,7 @@ class Aggregator(object):
         pass
 
     def _mix_neighbor_vectors(self, neighbor_vectors, neighbor_relations, user_embeddings, trans_M, hop):
+        # score = g(W_r * u, r)
         avg = False
         if not avg:
             n_neighbor = neighbor_vectors.shape[2].value
@@ -65,6 +66,52 @@ class Aggregator(object):
 
         return neighbors_aggregated
 
+    def _mix_neighbor_vectors_KGAT(self, self_vectors, neighbor_vectors, neighbor_relations, trans_M, hop):
+        # score = (W_r * e_t)^T * tanh(W_r * e_h + e_r)
+        n_neighbor = neighbor_vectors.shape[2].value
+        # [batch_size, n_neighbor^hop, 1, dim, 1]
+        self_vectors = tf.reshape(self_vectors, [self.batch_size, n_neighbor**hop, 1, self.dim, 1])
+        # [batch_size, n_neighbor^hop, n_neighbor, dim, 1]
+        self_vectors = tf.tile(self_vectors, [1, 1, n_neighbor, 1, 1])
+        # [batch_size, n_neighbor^hop, n_neighbor, dim, dim]
+        trans_M = tf.reshape(trans_M, [self.batch_size, n_neighbor**hop, n_neighbor, self.dim, self.dim])
+        # [batch_size, n_neighbor^hop, n_neighbor, dim, 1]
+        neighbor_relations = tf.expand_dims(neighbor_relations, axis=-1)
+        vector1 = tf.nn.tanh(tf.matmul(trans_M, self_vectors) + neighbor_relations)
+        # [batch_size, n_neighbor^hop, n_neighbor, dim, 1]
+        neighbor_vectors = tf.expand_dims(neighbor_vectors, -1)
+        # [batch_size, n_neighbor^hop, n_neighbor, 1, dim]
+        vector2 = tf.transpose(tf.matmul(trans_M, neighbor_vectors), [0, 1, 2, 4, 3])
+        scores = tf.reshape(tf.matmul(vector2, vector1), [self.batch_size, n_neighbor**hop, n_neighbor]) # [batch_size, n_neighbor^hop, n_neighbor]
+        scores_normalized = tf.nn.softmax(scores, dim=-1)
+        # [batch_size, n_neighbor^hop, n_neighbor, 1]
+        scores_normalized = tf.expand_dims(scores_normalized, axis=-1)
+        neighbor_vectors = tf.reshape(neighbor_vectors, [self.batch_size, n_neighbor**hop, n_neighbor, self.dim])
+        # [batch_size, -1, dim]
+        neighbors_aggregated = tf.reduce_mean(scores_normalized * neighbor_vectors, axis=2)
+
+        return neighbors_aggregated
+
+    def _mix_neighbor_vectors_initial(self, neighbor_vectors, neighbor_relations, user_embeddings):
+        avg = False
+        if not avg:
+            # [batch_size, 1, 1, dim]
+            user_embeddings = tf.reshape(user_embeddings, [self.batch_size, 1, 1, self.dim])
+
+            # [batch_size, -1, n_neighbor]
+            user_relation_scores = tf.reduce_mean(user_embeddings * neighbor_relations, axis=-1)
+            user_relation_scores_normalized = tf.nn.softmax(user_relation_scores, dim=-1)
+
+            # [batch_size, -1, n_neighbor, 1]
+            user_relation_scores_normalized = tf.expand_dims(user_relation_scores_normalized, axis=-1)
+
+            # [batch_size, -1, dim]
+            neighbors_aggregated = tf.reduce_mean(user_relation_scores_normalized * neighbor_vectors, axis=2)
+        else:
+            # [batch_size, -1, dim]
+            neighbors_aggregated = tf.reduce_mean(neighbor_vectors, axis=2)
+
+        return neighbors_aggregated
 
 class SumAggregator(Aggregator):
     def __init__(self, batch_size, dim, dropout=0., act=tf.nn.relu, name=None, n_iter=1):
@@ -77,8 +124,9 @@ class SumAggregator(Aggregator):
 
     def _call(self, self_vectors, neighbor_vectors, neighbor_relations, user_embeddings, trans_M, hop):
         # [batch_size, -1, dim]
-        neighbors_agg = self._mix_neighbor_vectors(neighbor_vectors, neighbor_relations, user_embeddings, trans_M, hop)
-
+        # neighbors_agg = self._mix_neighbor_vectors(neighbor_vectors, neighbor_relations, user_embeddings, trans_M, hop)
+        # neighbors_agg = self._mix_neighbor_vectors_KGAT(self_vectors, neighbor_vectors, neighbor_relations, trans_M, hop)
+        neighbors_agg = self._mix_neighbor_vectors_initial(neighbor_vectors, neighbor_relations, user_embeddings)
         # [-1, dim]
         output = tf.reshape(self_vectors + neighbors_agg, [-1, self.dim])
         output = tf.nn.dropout(output, keep_prob=1-self.dropout)

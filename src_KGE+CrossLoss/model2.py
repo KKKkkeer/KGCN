@@ -86,6 +86,11 @@ class KGCN(object):
             shape=[n_relation, self.dim, self.dim],
             initializer=KGCN.get_initializer(),
             name='trans_W')
+        self.agg_W = tf.get_variable(
+            shape=[1, self.n_iter+1, 1],
+            initializer=KGCN.get_initializer(),
+            name='layer_aggregate_weight'
+        )
 
 
     def _build_model(self):
@@ -200,6 +205,7 @@ class KGCN(object):
         trans_M = [
             tf.nn.embedding_lookup(self.trans_W, i) for i in relations]
         item_vector = []
+        out = tf.reshape(entity_vectors[0], [self.batch_size, self.dim, 1])
         for i in range(self.n_iter):
             aggregator = self.aggregators[i]
 
@@ -217,6 +223,7 @@ class KGCN(object):
                     user_embeddings=self.user_embeddings,
                     trans_M=trans_M[hop], hop=hop)
                 entity_vectors_next_iter.append(vector)
+            out = tf.concat([out, tf.reshape(entity_vectors_next_iter[0], [self.batch_size, self.dim, 1])], 2)
             entity_vectors = entity_vectors_next_iter
             item_vector.append(entity_vectors[0])
         # out_vector = tf.convert_to_tensor(item_vector,
@@ -226,10 +233,12 @@ class KGCN(object):
         # 说明：
         # 1. vecotr是已激活的
         # 2. 层聚合机制：out = (e1||e2||...||eL)
+        out = tf.matmul(out, tf.tile(self.agg_W, [self.batch_size, 1, 1]))
+        out = tf.reshape(out, [self.batch_size, self.dim])
 
         res = tf.reshape(out_vector, [self.batch_size, self.dim])
 
-        return res
+        return out
 
     def _build_loss_I(self):
         self.base_loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
@@ -237,7 +246,7 @@ class KGCN(object):
 
         self.l2_loss = tf.nn.l2_loss(self.user_emb_matrix) + tf.nn.l2_loss(
             self.entity_emb_matrix) + tf.nn.l2_loss(self.relation_emb_matrix) + \
-                tf.nn.l2_loss(self.trans_W)
+                tf.nn.l2_loss(self.trans_W) + tf.nn.l2_loss(self.agg_W)
         for aggregator in self.aggregators:
             self.l2_loss = self.l2_loss + tf.nn.l2_loss(aggregator.weights)
             if self.aggregator_class == BiInteractionAggregator:
